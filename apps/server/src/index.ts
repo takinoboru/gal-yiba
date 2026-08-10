@@ -33,6 +33,12 @@ import { DailyRegistry } from "./services/daily.js";
 import { MatchRecorder } from "./services/match-recorder.js";
 import { searchCatalog } from "./services/catalog-search.js";
 import { CatalogSyncService } from "./services/catalog-sync.js";
+import {
+  chooseKeyFanGuess,
+  keyFanAiKind,
+  keyFanAiNickname,
+  keyFanThinkTime,
+} from "./services/key-fan-ai.js";
 import { demoCatalog } from "./demo-catalog.js";
 import { MatchmakingPool } from "./matchmaking.js";
 const port = Number(process.env.PORT ?? 3000);
@@ -81,6 +87,7 @@ const createRoomSchema = z.object({
   fameTier: z.enum(["novice", "standard", "veteran", "experienced", "master"]),
   playerId: playerIdSchema,
   featureCode: featureCodeSchema,
+  aiOpponent: z.literal("key-fan").optional(),
 });
 const matchmakingSchema = z.object({
   nickname: nicknameSchema,
@@ -172,6 +179,7 @@ async function broadcastRoomState(roomCode: string): Promise<void> {
       // Ignore sockets that have not completed room authentication.
     }
   }
+  void scheduleKeyFanAi(roomCode);
 }
 
 function realtimeStats() {
@@ -239,6 +247,63 @@ function scheduleIntermissionEnd(roomCode: string, deadlineAt: string): void {
       void broadcastRoomState(advancedRoom.code);
     }
   }, delay).unref();
+}
+
+const keyFanAiTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+async function scheduleKeyFanAi(roomCode: string): Promise<void> {
+  let room;
+  try {
+    room = rooms.get(roomCode);
+  } catch {
+    return;
+  }
+  if (room.phase !== "active" || !room.round) return;
+  let catalog;
+  try {
+    catalog = await loadCatalog();
+  } catch (error) {
+    console.error("Key fan AI could not load the catalog:", error);
+    return;
+  }
+  for (const playerId of rooms.botPlayerIds(roomCode, keyFanAiKind)) {
+    if (keyFanAiTimers.has(playerId)) continue;
+    const game = rooms.getPlayerGame(roomCode, playerId);
+    if (game.status !== "active") continue;
+    const timer = setTimeout(() => {
+      keyFanAiTimers.delete(playerId);
+      void (async () => {
+        try {
+          const currentRoom = rooms.get(roomCode);
+          if (currentRoom.phase !== "active") return;
+          const currentGame = rooms.getPlayerGame(roomCode, playerId);
+          if (currentGame.status !== "active") return;
+          const decision = chooseKeyFanGuess(catalog, currentGame);
+          if (!decision) return;
+          const result = rooms.submitPlayerGuess(
+            roomCode,
+            playerId,
+            decision.visualNovelId,
+            catalog,
+          );
+          await broadcastRoomState(result.room.code);
+          await persistMatchIfFinished(result.room.code);
+        } catch (error) {
+          const message =
+            error instanceof Error ? error.message : String(error);
+          if (
+            message !== "ROOM_NOT_FOUND" &&
+            message !== "ROOM_NOT_ACTIVE" &&
+            message !== "PLAYER_NOT_IN_ROUND"
+          ) {
+            console.error("Key fan AI turn failed:", error);
+          }
+        }
+      })();
+    }, keyFanThinkTime());
+    timer.unref();
+    keyFanAiTimers.set(playerId, timer);
+  }
 }
 
 app.use(cors({ origin: webOrigin, credentials: true }));
@@ -666,6 +731,8 @@ io.on("connection", (socket) => {
       matchmaking.cancel(socket.id);
       broadcastMatchmakingState();
       const input = createRoomSchema.parse(payload);
+      if (input.aiOpponent && input.mode !== "duel")
+        throw new Error("AI_DUEL_ONLY");
       const result = rooms.create(
         input.nickname,
         input.mode,
@@ -673,10 +740,27 @@ io.on("connection", (socket) => {
         input.playerId,
         input.featureCode,
       );
+      const room = input.aiOpponent
+        ? rooms.addKeyFanBot(
+            result.room.code,
+            result.session.playerId,
+            keyFanAiNickname,
+          ).room
+        : result.room;
+      if (input.aiOpponent) {
+        const [botPlayerId] = rooms.botPlayerIds(room.code, keyFanAiKind);
+        if (botPlayerId) {
+          rooms.postChat(
+            room.code,
+            botPlayerId,
+            "Key 作品我全都记得。其他作品只知道年份、会社和年龄分级，而且会随机猜。",
+          );
+        }
+      }
       socket.join(result.room.code);
       bindSocketSession(socket, result.room.code, result.session.playerId);
-      acknowledge({ ok: true, ...result });
-      await broadcastRoomState(result.room.code);
+      acknowledge({ ok: true, ...result, room });
+      await broadcastRoomState(room.code);
     } catch (error) {
       acknowledge({
         ok: false,

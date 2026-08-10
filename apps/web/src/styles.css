@@ -2836,6 +2836,60 @@ button {
 .room-entry-block {
   background: color-mix(in srgb, var(--coral-soft) 22%, var(--surface-solid));
 }
+.key-ai-block {
+  background:
+    radial-gradient(
+      circle at 88% 18%,
+      color-mix(in srgb, var(--honey) 34%, transparent),
+      transparent 35%
+    ),
+    color-mix(in srgb, var(--coral-soft) 16%, var(--surface-solid));
+  box-shadow: inset 4px 0 color-mix(in srgb, var(--coral) 72%, transparent);
+}
+.key-ai-body {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 20px;
+  padding-top: 16px;
+}
+.key-ai-body strong {
+  color: var(--ink-strong);
+  font-size: 15px;
+}
+.key-ai-body p {
+  max-width: 66ch;
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.75;
+}
+.key-ai-button {
+  border-color: color-mix(in srgb, var(--coral) 72%, var(--line-strong));
+  color: var(--ink-strong);
+  background: linear-gradient(
+    135deg,
+    color-mix(in srgb, var(--coral-soft) 72%, var(--surface-solid)),
+    color-mix(in srgb, var(--honey) 30%, var(--surface-solid))
+  );
+  font-weight: 800;
+}
+.key-ai-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+.ai-badge {
+  margin-right: 6px;
+  border: 1px solid color-mix(in srgb, var(--coral) 62%, var(--line));
+  border-radius: 999px;
+  padding: 2px 6px;
+  color: var(--coral-strong);
+  background: color-mix(in srgb, var(--coral-soft) 48%, var(--surface-solid));
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
 .ranked-match-block {
   background: color-mix(in srgb, var(--mint-soft) 34%, var(--surface-solid));
   box-shadow: inset 4px 0 color-mix(in srgb, var(--honey) 72%, transparent);
@@ -3059,6 +3113,12 @@ button {
   }
   .rank-profile-card {
     grid-template-columns: 1fr;
+  }
+  .key-ai-body {
+    grid-template-columns: 1fr;
+  }
+  .key-ai-button {
+    width: 100%;
   }
   .rank-profile-card > div:nth-child(2) {
     justify-items: start;

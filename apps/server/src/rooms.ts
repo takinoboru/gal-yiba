@@ -23,6 +23,7 @@ export interface RoomPlayer {
   ready: boolean;
   connected: boolean;
   rankLabel: string | null;
+  botKind?: "key-fan";
 }
 
 export interface RankedMatchConfig {
@@ -333,6 +334,38 @@ export class RoomRegistry {
     return { room: snapshot(room), session: { playerId, reconnectToken } };
   }
 
+  addKeyFanBot(
+    codeInput: string,
+    hostPlayerId: string,
+    nickname = "Key 孝子 AI",
+  ): { room: RoomSnapshot; playerId: string } {
+    const room = this.requireRoom(codeInput.trim().toUpperCase());
+    if (room.phase !== "lobby") throw new Error("ROOM_ALREADY_STARTED");
+    if (room.hostPlayerId !== hostPlayerId) throw new Error("HOST_ONLY");
+    if (room.rules.mode !== "duel") throw new Error("AI_DUEL_ONLY");
+    if (room.players.size >= 2) throw new Error("ROOM_FULL");
+    const playerId = randomUUID();
+    room.players.set(playerId, {
+      id: playerId,
+      nickname,
+      ready: true,
+      connected: true,
+      rankLabel: null,
+      botKind: "key-fan",
+    });
+    room.scores.set(playerId, 0);
+    room.featureCodes.set(playerId, null);
+    room.revision += 1;
+    return { room: snapshot(room), playerId };
+  }
+
+  botPlayerIds(codeInput: string, botKind: "key-fan"): string[] {
+    const room = this.requireRoom(codeInput.trim().toUpperCase());
+    return [...room.players.values()]
+      .filter((player) => player.botKind === botKind)
+      .map((player) => player.id);
+  }
+
   reconnect(
     codeInput: string,
     reconnectToken: string,
@@ -486,7 +519,9 @@ export class RoomRegistry {
     room.intermissionDeadlineAt = new Date(
       now.getTime() + 60_000,
     ).toISOString();
-    for (const player of room.players.values()) player.ready = false;
+    for (const player of room.players.values()) {
+      player.ready = player.botKind != null;
+    }
   }
 
   /** 中场倒计时结束：无论准备与否都开下一轮。 */
@@ -595,7 +630,9 @@ export class RoomRegistry {
     room.matchWinnerPlayerId = null;
     room.intermissionDeadlineAt = null;
     room.rematchVotes.clear();
-    for (const player of room.players.values()) player.ready = false;
+    for (const player of room.players.values()) {
+      player.ready = player.botKind != null;
+    }
     for (const playerIdKey of room.scores.keys()) {
       room.scores.set(playerIdKey, 0);
     }

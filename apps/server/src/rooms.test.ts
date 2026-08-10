@@ -239,6 +239,32 @@ describe("RoomRegistry", () => {
     expect(started.round?.players).toHaveLength(1);
   });
 
+  it("adds a ready Key fan AI opponent to a duel", () => {
+    const registry = new RoomRegistry();
+    const host = registry.create("房主", "duel");
+    const added = registry.addKeyFanBot(host.room.code, host.session.playerId);
+    const bot = added.room.players.find(
+      (player) => player.botKind === "key-fan",
+    );
+
+    expect(bot).toMatchObject({
+      nickname: "Key 孝子 AI",
+      ready: true,
+      connected: true,
+      botKind: "key-fan",
+    });
+    expect(added.room.players).toHaveLength(2);
+
+    const started = registry.start(
+      host.room.code,
+      host.session.playerId,
+      [visualNovel("answer")],
+      { random: () => 0 },
+    );
+    expect(started.phase).toBe("active");
+    expect(started.round?.players).toHaveLength(2);
+  });
+
   it("caps 1v1 rooms at two players and awards a win when one leaves", () => {
     const registry = new RoomRegistry();
     const host = registry.create("房主", "duel");

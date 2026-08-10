@@ -147,6 +147,7 @@ interface RoomPlayer {
   ready: boolean;
   connected: boolean;
   rankLabel: string | null;
+  botKind?: "key-fan";
 }
 
 interface RoomSnapshot {
@@ -932,15 +933,16 @@ export function App() {
     }
   }
 
-  function createRoom() {
+  function createRoom(aiOpponent?: "key-fan") {
     socket.emit(
       "room:create",
       {
         nickname: nickname.trim(),
-        mode: selectedMode,
+        mode: aiOpponent ? "duel" : selectedMode,
         fameTier: selectedFameTier,
         playerId,
         featureCode: featureCode || undefined,
+        aiOpponent,
       },
       handleRoomResponse,
     );
@@ -1412,7 +1414,7 @@ export function App() {
                       <button
                         className="primary"
                         disabled={!canEnter || matchmakingPosition !== null}
-                        onClick={createRoom}
+                        onClick={() => createRoom()}
                       >
                         {selectedMode === "solo" ? "进入单人准备" : "创建房间"}
                       </button>
@@ -1437,6 +1439,32 @@ export function App() {
                           加入
                         </button>
                       </div>
+                    </div>
+                  </section>
+
+                  <section className="entry-function-block key-ai-block">
+                    <header>
+                      <div>
+                        <small>AI 挑战</small>
+                        <h2>Key 孝子 AI</h2>
+                      </div>
+                      <span>固定 1v1 · 可自定义本局判定标准</span>
+                    </header>
+                    <div className="key-ai-body">
+                      <div>
+                        <strong>Key 作品，全都刻在 DNA 里。</strong>
+                        <p>
+                          它完整记得 Key
+                          社作品；面对其他会社，只模糊记得年份、会社和年龄分级等少量信息，并以随机选择模拟真人猜测。
+                        </p>
+                      </div>
+                      <button
+                        className="key-ai-button"
+                        disabled={!canEnter || matchmakingPosition !== null}
+                        onClick={() => createRoom("key-fan")}
+                      >
+                        挑战 Key 孝子 AI
+                      </button>
                     </div>
                   </section>
 
@@ -1594,6 +1622,9 @@ export function App() {
                         <span>
                           {player.rankLabel && (
                             <em className="rank-badge">{player.rankLabel}</em>
+                          )}
+                          {player.botKind === "key-fan" && (
+                            <em className="ai-badge">KEY AI</em>
                           )}
                           {player.nickname}
                         </span>

@@ -2,7 +2,7 @@
 
 一个可自定义比较项、以 VNDB 与 Bangumi 为数据来源、支持在线房间对战的 Galgame 猜谜网站。
 
-项目目前处于可联机体验的第一阶段。GitHub 项目地址：[komariChikaA/gal-yiba](https://github.com/komariChikaA/gal-yiba)。生产服务器地址与凭据不写入仓库；部署时通过环境变量和反向代理配置域名。产品决策与数据边界见：
+项目目前处于可联机体验的第一阶段。本开源 fork：[takinoboru/gal-yiba](https://github.com/takinoboru/gal-yiba)；上游项目：[komariChikaA/gal-yiba](https://github.com/komariChikaA/gal-yiba)。生产服务器地址与凭据不写入仓库；部署时通过环境变量和反向代理配置域名。产品决策与数据边界见：
 
 - [产品范围](docs/PRODUCT_SPEC.md)
 - [系统架构](docs/ARCHITECTURE.md)
@@ -13,6 +13,7 @@
 ## 已实现
 
 - 单人、1v1 与 2–8 人多人竞技；房间加入、准备、同题同步开局、退出与短时断线重连；房主开局时自动移除离线且未准备的成员
+- 首页可直接创建与 Key 孝子 AI 的 1v1：它完整掌握 Key 社作品资料，面对其他作品只保留年份、会社和年龄分级等少量记忆，并用随机选择模拟偏科真人
 - 首页把“创建/加入房间”与“1v1 段位匹配”拆成职责独立的两个区块，避免把自定义房间选项误当成匹配规则
 - 1v1 快速匹配池按萌新/入门/标准难度和 BO1/BO3 分组并先到先配；即使池中无人也可点击加入，匹配房固定使用系统默认判定标准
 - 段位匹配要求绑定至少 4 位特征码；服务端由规范化特征码派生唯一玩家 ID，同一码跨设备读取相同段位、PT 与战绩
@@ -67,4 +68,6 @@ Windows PowerShell 请先设置 `$env:SERVER_URL`，再运行同一条 `pnpm` �
 
 生产服务器可使用 `docker compose up -d --build`；部署前需按[部署指南](docs/DEPLOYMENT.md)配置数据库密码、域名和 Bangumi User-Agent。
 
-> 本项目公开发布于 [komariChikaA/gal-yiba](https://github.com/komariChikaA/gal-yiba)。软件许可证仍待确认；当前实现只参考交互和前后端分工，没有复制参考项目的 AGPL 源码。
+## 开源许可
+
+本 fork 以 [MIT License](LICENSE) 开源。贡献代码即表示同意按相同许可证分发。请同时保留上游提交历史与数据来源归属。
