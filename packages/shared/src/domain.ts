@@ -38,6 +38,8 @@ export type AnimeAdaptation = "none" | "announced" | "has_adaptation";
 export type AgeRating = "all_ages" | "restricted" | "unknown";
 export type GameMode = "solo" | "duel" | "race";
 export type AiOpponentKind = "key-fan" | "yuzu-fan";
+export type AiDifficulty = "easy" | "medium" | "hard";
+export type AiStrategy = "hybrid" | "entropy";
 export type FameTier =
   "novice" | "standard" | "veteran" | "experienced" | "master";
 export type HeroineHairColor =

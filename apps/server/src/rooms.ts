@@ -25,6 +25,8 @@ export interface RoomPlayer {
   connected: boolean;
   rankLabel: string | null;
   botKind?: AiOpponentKind;
+  customAiId?: string;
+  avatarUrl?: string;
 }
 
 export interface RankedMatchConfig {
@@ -361,16 +363,48 @@ export class RoomRegistry {
     return { room: snapshot(room), playerId };
   }
 
+  addCustomBot(
+    codeInput: string,
+    hostPlayerId: string,
+    customAiId: string,
+    nickname: string,
+    avatarUrl: string,
+  ): { room: RoomSnapshot; playerId: string } {
+    const room = this.requireRoom(codeInput.trim().toUpperCase());
+    if (room.phase !== "lobby") throw new Error("ROOM_ALREADY_STARTED");
+    if (room.hostPlayerId !== hostPlayerId) throw new Error("HOST_ONLY");
+    if (room.rules.mode !== "duel") throw new Error("AI_DUEL_ONLY");
+    if (room.players.size >= 2) throw new Error("ROOM_FULL");
+    const playerId = randomUUID();
+    room.players.set(playerId, {
+      id: playerId,
+      nickname,
+      ready: true,
+      connected: true,
+      rankLabel: null,
+      customAiId,
+      avatarUrl,
+    });
+    room.scores.set(playerId, 0);
+    room.featureCodes.set(playerId, null);
+    room.revision += 1;
+    return { room: snapshot(room), playerId };
+  }
+
   botPlayers(
     codeInput: string,
-  ): Array<{ playerId: string; botKind: AiOpponentKind }> {
+  ): Array<
+    | { playerId: string; botKind: AiOpponentKind; customAiId?: never }
+    | { playerId: string; customAiId: string; botKind?: never }
+  > {
     const room = this.requireRoom(codeInput.trim().toUpperCase());
     return [...room.players.values()]
-      .filter(
-        (player): player is RoomPlayer & { botKind: AiOpponentKind } =>
-          player.botKind != null,
-      )
-      .map((player) => ({ playerId: player.id, botKind: player.botKind }));
+      .filter((player) => player.botKind != null || player.customAiId != null)
+      .map((player) =>
+        player.botKind
+          ? { playerId: player.id, botKind: player.botKind }
+          : { playerId: player.id, customAiId: player.customAiId! },
+      );
   }
 
   reconnect(
@@ -527,7 +561,7 @@ export class RoomRegistry {
       now.getTime() + 60_000,
     ).toISOString();
     for (const player of room.players.values()) {
-      player.ready = player.botKind != null;
+      player.ready = player.botKind != null || player.customAiId != null;
     }
   }
 
@@ -638,7 +672,7 @@ export class RoomRegistry {
     room.intermissionDeadlineAt = null;
     room.rematchVotes.clear();
     for (const player of room.players.values()) {
-      player.ready = player.botKind != null;
+      player.ready = player.botKind != null || player.customAiId != null;
     }
     for (const playerIdKey of room.scores.keys()) {
       room.scores.set(playerIdKey, 0);

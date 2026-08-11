@@ -5,7 +5,9 @@ import {
   defaultComparisonKeys,
   rankDefinitions,
   voteTierThresholds,
+  type AiDifficulty,
   type AiOpponentKind,
+  type AiStrategy,
   type ComparisonKey,
   type ComparisonResult,
   type FameTier,
@@ -179,6 +181,8 @@ interface RoomPlayer {
   connected: boolean;
   rankLabel: string | null;
   botKind?: AiOpponentKind;
+  customAiId?: string;
+  avatarUrl?: string;
 }
 
 interface RoomSnapshot {
@@ -243,8 +247,126 @@ interface PublicGameSession {
 
 interface AiDebugPlayer {
   playerId: string;
-  botKind: AiOpponentKind;
+  botKind?: AiOpponentKind;
+  customAiId?: string;
   game: PublicGameSession;
+}
+
+interface CustomAiPlayer {
+  id: string;
+  bangumiUsername: string;
+  handle: string;
+  nickname: string;
+  avatarUrl: string;
+  profileUrl: string;
+  difficulty: AiDifficulty;
+  strategy: AiStrategy;
+  targetDatabaseSize: 100 | 250 | 500 | 750 | 1024;
+  databaseSize: number;
+  collectionCounts: { high: number; limited: number; total: number };
+  knowledgeCounts: {
+    high: number;
+    limited: number;
+    basic: number;
+    random: number;
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface CyberArenaPlayer {
+  playerId: string;
+  profile: CustomAiPlayer;
+  game: PublicGameSession;
+}
+
+interface CyberArenaMatch {
+  id: string;
+  status: "active" | "finished";
+  fameTier: FameTier;
+  createdAt: string;
+  finishedAt: string | null;
+  winnerPlayerId: string | null;
+  answer: { id: string; title: string } | null;
+  players: CyberArenaPlayer[];
+  revision: number;
+}
+
+interface CyberArenaSummary {
+  id: string;
+  status: "active" | "finished";
+  fameTier: FameTier;
+  createdAt: string;
+  winnerPlayerId: string | null;
+  players: Array<{
+    playerId: string;
+    profileId: string;
+    nickname: string;
+    avatarUrl: string;
+    guessCount: number;
+  }>;
+}
+
+const aiDifficultyLabels: Record<AiDifficulty, string> = {
+  easy: "简单 · 约 30 秒",
+  medium: "中等 · 约 25 秒",
+  hard: "困难 · 约 15 秒",
+};
+
+const aiStrategyLabels: Record<AiStrategy, string> = {
+  hybrid: "混合策略",
+  entropy: "最小信息熵",
+};
+
+function VisibleAiGuessTrail({ player }: { player: CyberArenaPlayer }) {
+  return (
+    <article className="cyber-fighter-column">
+      <header>
+        <img src={player.profile.avatarUrl} alt="" />
+        <span>
+          <strong>{player.profile.nickname}</strong>
+          <small>
+            {player.profile.handle} ·{" "}
+            {aiDifficultyLabels[player.profile.difficulty]}
+          </small>
+        </span>
+        <b>{player.game.guesses.length} 猜</b>
+      </header>
+      <div className="cyber-guess-list" aria-live="polite">
+        {player.game.guesses.length === 0 ? (
+          <p>正在思考第一次猜测……</p>
+        ) : (
+          player.game.guesses
+            .slice()
+            .reverse()
+            .map((guess) => (
+              <section key={guess.visualNovelId}>
+                <header className={`title-${guess.titleStatus}`}>
+                  <b>{guess.displayTitle ?? guess.title}</b>
+                  <small>第 {guess.guessNumber} 次</small>
+                </header>
+                <div>
+                  {guess.comparison.map((result) => (
+                    <span
+                      key={result.key}
+                      className={`comparison-card ${result.status}`}
+                    >
+                      <small>{comparisonLabels[result.key]}</small>
+                      <strong title={formatComparisonValue(result)}>
+                        {formatComparisonValue(result)}
+                      </strong>
+                      <i aria-label={formatComparisonAriaLabel(result)}>
+                        {comparisonSymbol(result)}
+                      </i>
+                    </span>
+                  ))}
+                </div>
+              </section>
+            ))
+        )}
+      </div>
+    </article>
+  );
 }
 
 interface FameCatalogInfo {
@@ -376,6 +498,20 @@ export function App() {
     useState<FameCatalogInfo | null>(null);
   const [aiOpponents, setAiOpponents] =
     useState<AiOpponentOption[]>(fallbackAiOpponents);
+  const [customAiPlayers, setCustomAiPlayers] = useState<CustomAiPlayer[]>([]);
+  const [customAiHandle, setCustomAiHandle] = useState("@");
+  const [customAiDifficulty, setCustomAiDifficulty] =
+    useState<AiDifficulty>("medium");
+  const [customAiStrategy, setCustomAiStrategy] =
+    useState<AiStrategy>("hybrid");
+  const [customAiBusy, setCustomAiBusy] = useState(false);
+  const [customAiMessage, setCustomAiMessage] = useState("");
+  const [cyberMatches, setCyberMatches] = useState<CyberArenaSummary[]>([]);
+  const [cyberLeftId, setCyberLeftId] = useState("");
+  const [cyberRightId, setCyberRightId] = useState("");
+  const [cyberFameTier, setCyberFameTier] = useState<FameTier>("veteran");
+  const [cyberMatch, setCyberMatch] = useState<CyberArenaMatch | null>(null);
+  const [cyberBusy, setCyberBusy] = useState(false);
   const [aiDebugAvailable, setAiDebugAvailable] = useState(false);
   const [aiDebugPlayers, setAiDebugPlayers] = useState<AiDebugPlayer[]>([]);
   const [joinCode, setJoinCode] = useState("");
@@ -535,6 +671,23 @@ export function App() {
         setAiOpponents(fallbackAiOpponents);
         setAiDebugAvailable(false);
       });
+    void fetch("/api/custom-ai-players")
+      .then(
+        (response) => response.json() as Promise<{ items: CustomAiPlayer[] }>,
+      )
+      .then((body) => {
+        setCustomAiPlayers(body.items);
+        setCyberLeftId((current) => current || body.items[0]?.id || "");
+        setCyberRightId((current) => current || body.items[1]?.id || "");
+      })
+      .catch(() => setCustomAiPlayers([]));
+    void fetch("/api/cyber-matches")
+      .then(
+        (response) =>
+          response.json() as Promise<{ items: CyberArenaSummary[] }>,
+      )
+      .then((body) => setCyberMatches(body.items))
+      .catch(() => setCyberMatches([]));
   }, []);
 
   useEffect(() => {
@@ -764,6 +917,17 @@ export function App() {
       setMatchmakingPosition(null);
       handleRoomResponse(response);
     };
+    const onCustomAiUpdated = (payload: { items: CustomAiPlayer[] }) => {
+      setCustomAiPlayers(payload.items);
+      setCyberLeftId((current) => current || payload.items[0]?.id || "");
+      setCyberRightId((current) => current || payload.items[1]?.id || "");
+    };
+    const onCyberMatchesUpdated = (payload: { items: CyberArenaSummary[] }) =>
+      setCyberMatches(payload.items);
+    const onCyberState = (nextMatch: CyberArenaMatch) =>
+      setCyberMatch(nextMatch);
+    const onChatMessage = (message: ChatMessage) =>
+      setChatMessages((current) => [...current, message].slice(-100));
     socket.on("connect", onConnect);
     socket.on("disconnect", onDisconnect);
     socket.on("room:updated", onRoomUpdated);
@@ -773,10 +937,10 @@ export function App() {
     socket.on("matchmaking:stats", onMatchmakingStats);
     socket.on("matchmaking:position", onMatchmakingPosition);
     socket.on("matchmaking:matched", onMatchmakingMatched);
-
-    socket.on("room:chat", (message: ChatMessage) =>
-      setChatMessages((current) => [...current, message].slice(-100)),
-    );
+    socket.on("custom-ai:updated", onCustomAiUpdated);
+    socket.on("cyber:matches-updated", onCyberMatchesUpdated);
+    socket.on("cyber:state", onCyberState);
+    socket.on("room:chat", onChatMessage);
     if (socket.connected) tryReconnect();
     return () => {
       socket.off("connect", onConnect);
@@ -788,6 +952,10 @@ export function App() {
       socket.off("matchmaking:stats", onMatchmakingStats);
       socket.off("matchmaking:position", onMatchmakingPosition);
       socket.off("matchmaking:matched", onMatchmakingMatched);
+      socket.off("custom-ai:updated", onCustomAiUpdated);
+      socket.off("cyber:matches-updated", onCyberMatchesUpdated);
+      socket.off("cyber:state", onCyberState);
+      socket.off("room:chat", onChatMessage);
     };
   }, []);
 
@@ -1009,19 +1177,123 @@ export function App() {
     }
   }
 
-  function createRoom(aiOpponent?: AiOpponentKind) {
+  function createRoom(
+    aiOpponent?: AiOpponentKind,
+    customAiOpponentId?: string,
+  ) {
     socket.emit(
       "room:create",
       {
         nickname: nickname.trim(),
-        mode: aiOpponent ? "duel" : selectedMode,
+        mode: aiOpponent || customAiOpponentId ? "duel" : selectedMode,
         fameTier: selectedFameTier,
         playerId,
         featureCode: featureCode || undefined,
         aiOpponent,
+        customAiOpponentId,
       },
       handleRoomResponse,
     );
+  }
+
+  async function importCustomAiPlayer() {
+    if (!customAiHandle.startsWith("@") || customAiHandle.length < 2) {
+      setCustomAiMessage("请输入以 @ 开头的 Bangumi 用户名。");
+      return;
+    }
+    setCustomAiBusy(true);
+    setCustomAiMessage("正在读取公开收藏并建立记忆库……");
+    try {
+      const response = await fetch("/api/custom-ai-players", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          handle: customAiHandle,
+          difficulty: customAiDifficulty,
+          strategy: customAiStrategy,
+        }),
+      });
+      const body = (await response.json()) as {
+        profile?: CustomAiPlayer;
+        error?: string;
+      };
+      if (!response.ok || !body.profile) {
+        setCustomAiMessage(body.error ?? "CUSTOM_AI_IMPORT_FAILED");
+        return;
+      }
+      const profile = body.profile;
+      setCustomAiPlayers((current) => [
+        profile,
+        ...current.filter((item) => item.id !== profile.id),
+      ]);
+      setCyberLeftId((current) => current || profile.id);
+      setCyberRightId(
+        (current) =>
+          current ||
+          customAiPlayers.find((item) => item.id !== profile.id)?.id ||
+          "",
+      );
+      setCustomAiMessage(
+        `已建立 ${profile.nickname} 的 ${profile.databaseSize} 部记忆库（目标档 ${profile.targetDatabaseSize}）。`,
+      );
+    } catch {
+      setCustomAiMessage("Bangumi 用户资料读取失败，请稍后重试。");
+    } finally {
+      setCustomAiBusy(false);
+    }
+  }
+
+  function watchCyberMatch(matchId: string) {
+    socket.emit(
+      "cyber:watch",
+      { matchId },
+      (response: { ok: boolean; match?: CyberArenaMatch; error?: string }) => {
+        if (!response.ok || !response.match) {
+          setError(response.error ?? "CYBER_MATCH_NOT_FOUND");
+          return;
+        }
+        setError("");
+        setCyberMatch(response.match);
+        window.setTimeout(() => {
+          document
+            .getElementById("cyber-live")
+            ?.scrollIntoView({ behavior: "smooth", block: "start" });
+        }, 0);
+      },
+    );
+  }
+
+  async function startCyberMatch() {
+    if (!cyberLeftId || !cyberRightId || cyberLeftId === cyberRightId) {
+      setError("请选择两名不同的 AI 真人玩家。");
+      return;
+    }
+    setCyberBusy(true);
+    setError("");
+    try {
+      const response = await fetch("/api/cyber-matches", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          leftPlayerId: cyberLeftId,
+          rightPlayerId: cyberRightId,
+          fameTier: cyberFameTier,
+        }),
+      });
+      const body = (await response.json()) as {
+        match?: CyberArenaMatch;
+        error?: string;
+      };
+      if (!response.ok || !body.match) {
+        setError(body.error ?? "CYBER_MATCH_CREATE_FAILED");
+        return;
+      }
+      watchCyberMatch(body.match.id);
+    } catch {
+      setError("赛博对战创建失败。");
+    } finally {
+      setCyberBusy(false);
+    }
   }
 
   function joinMatchmaking() {
@@ -1205,10 +1477,16 @@ export function App() {
     socket.emit(
       "room:start",
       {},
-      (response: { ok: boolean; error?: string; game?: PublicGameSession }) => {
+      (response: {
+        ok: boolean;
+        error?: string;
+        room?: RoomSnapshot;
+        game?: PublicGameSession;
+      }) => {
         if (!response.ok) setError(response.error ?? "ROOM_START_FAILED");
         else {
           setError("");
+          if (response.room) setRoom(response.room);
           if (response.game) setGame(response.game);
         }
       },
@@ -1330,6 +1608,7 @@ export function App() {
         </a>
         <nav>
           <a href="#modes">玩法</a>
+          <a href="#cyber-arena">斗蛐蛐</a>
           <a href="#data">数据</a>
           <a
             className="github-link"
@@ -1549,10 +1828,246 @@ export function App() {
                         </article>
                       ))}
                     </div>
+                    <div className="custom-ai-builder">
+                      <div>
+                        <small>AI 真人玩家生成器</small>
+                        <h3>从 Bangumi 公开收藏建立记忆</h3>
+                        <p>
+                          在玩/玩过保留大部分资料；想玩、搁置、抛弃仅保留基础资料，随后随机扩充到最近的容量档。
+                        </p>
+                      </div>
+                      <label>
+                        <span>Bangumi 用户名</span>
+                        <input
+                          value={customAiHandle}
+                          maxLength={65}
+                          placeholder="@username"
+                          onChange={(event) =>
+                            setCustomAiHandle(event.target.value)
+                          }
+                        />
+                      </label>
+                      <label>
+                        <span>猜测速度</span>
+                        <select
+                          value={customAiDifficulty}
+                          onChange={(event) =>
+                            setCustomAiDifficulty(
+                              event.target.value as AiDifficulty,
+                            )
+                          }
+                        >
+                          {Object.entries(aiDifficultyLabels).map(
+                            ([value, label]) => (
+                              <option key={value} value={value}>
+                                {label}
+                              </option>
+                            ),
+                          )}
+                        </select>
+                      </label>
+                      <label>
+                        <span>模拟策略</span>
+                        <select
+                          value={customAiStrategy}
+                          onChange={(event) =>
+                            setCustomAiStrategy(
+                              event.target.value as AiStrategy,
+                            )
+                          }
+                        >
+                          {Object.entries(aiStrategyLabels).map(
+                            ([value, label]) => (
+                              <option key={value} value={value}>
+                                {label}
+                              </option>
+                            ),
+                          )}
+                        </select>
+                      </label>
+                      <button
+                        className="entry-cta custom-ai-create"
+                        disabled={customAiBusy}
+                        onClick={() => void importCustomAiPlayer()}
+                      >
+                        {customAiBusy ? "正在建立记忆库…" : "创建 AI 真人玩家"}
+                      </button>
+                      {customAiMessage && (
+                        <p className="custom-ai-message" role="status">
+                          {customAiMessage}
+                        </p>
+                      )}
+                    </div>
+                    {customAiPlayers.length > 0 && (
+                      <div className="custom-ai-roster">
+                        <h3>已创建的 AI 真人玩家</h3>
+                        <div className="ai-opponent-grid custom">
+                          {customAiPlayers.map((profile) => (
+                            <article key={profile.id}>
+                              <header>
+                                <img src={profile.avatarUrl} alt="" />
+                                <h3>{profile.nickname}</h3>
+                                <small>{profile.handle}</small>
+                              </header>
+                              <strong>
+                                {aiStrategyLabels[profile.strategy]} ·{" "}
+                                {aiDifficultyLabels[profile.difficulty]}
+                              </strong>
+                              <p>
+                                公开收藏 {profile.collectionCounts.total} 部 ·
+                                玩过/在玩 {profile.collectionCounts.high} 部 ·
+                                本地记忆库 {profile.databaseSize} / 目标{" "}
+                                {profile.targetDatabaseSize} 部
+                              </p>
+                              <button
+                                className="ai-opponent-button entry-cta"
+                                disabled={
+                                  !canEnter || matchmakingPosition !== null
+                                }
+                                onClick={() =>
+                                  createRoom(undefined, profile.id)
+                                }
+                              >
+                                挑战 {profile.nickname}
+                              </button>
+                            </article>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     {aiDebugAvailable && (
                       <p className="ai-debug-available">
                         AI 调试模式已启用；进入对局后可切换完整猜测轨迹。
                       </p>
+                    )}
+                  </section>
+
+                  <section
+                    className="entry-function-block cyber-arena-block"
+                    id="cyber-arena"
+                  >
+                    <header>
+                      <div>
+                        <small>公开观战</small>
+                        <h2>赛博斗蛐蛐</h2>
+                      </div>
+                      <span>AI vs AI · 所有猜测与判定全程可见</span>
+                    </header>
+                    <div className="cyber-match-builder">
+                      <label>
+                        <span>左侧选手</span>
+                        <select
+                          value={cyberLeftId}
+                          onChange={(event) =>
+                            setCyberLeftId(event.target.value)
+                          }
+                        >
+                          <option value="">选择 AI 真人玩家</option>
+                          {customAiPlayers.map((profile) => (
+                            <option key={profile.id} value={profile.id}>
+                              {profile.nickname}（{profile.handle}）
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <b aria-hidden="true">VS</b>
+                      <label>
+                        <span>右侧选手</span>
+                        <select
+                          value={cyberRightId}
+                          onChange={(event) =>
+                            setCyberRightId(event.target.value)
+                          }
+                        >
+                          <option value="">选择 AI 真人玩家</option>
+                          {customAiPlayers.map((profile) => (
+                            <option key={profile.id} value={profile.id}>
+                              {profile.nickname}（{profile.handle}）
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        <span>题池知名度</span>
+                        <select
+                          value={cyberFameTier}
+                          onChange={(event) =>
+                            setCyberFameTier(event.target.value as FameTier)
+                          }
+                        >
+                          {fameOptions.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label} · {option.description}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        className="entry-cta cyber-start-button"
+                        disabled={
+                          cyberBusy ||
+                          customAiPlayers.length < 2 ||
+                          !cyberLeftId ||
+                          !cyberRightId ||
+                          cyberLeftId === cyberRightId
+                        }
+                        onClick={() => void startCyberMatch()}
+                      >
+                        {cyberBusy ? "正在开赛…" : "开一场公开斗蛐蛐"}
+                      </button>
+                    </div>
+                    {customAiPlayers.length < 2 && (
+                      <p className="cyber-empty-note">
+                        先在上方创建至少两名 AI 真人玩家，即可安排对战。
+                      </p>
+                    )}
+                    {cyberMatches.length > 0 && (
+                      <div className="cyber-match-list">
+                        <h3>最近赛场</h3>
+                        {cyberMatches.slice(0, 6).map((match) => (
+                          <button
+                            key={match.id}
+                            onClick={() => watchCyberMatch(match.id)}
+                          >
+                            <span>
+                              {match.players[0]?.nickname ?? "AI"} vs{" "}
+                              {match.players[1]?.nickname ?? "AI"}
+                            </span>
+                            <small>
+                              {match.status === "active" ? "直播中" : "已结束"}·{" "}
+                              {match.players[0]?.guessCount ?? 0}:
+                              {match.players[1]?.guessCount ?? 0} 猜
+                            </small>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                    {cyberMatch && (
+                      <div className="cyber-live" id="cyber-live">
+                        <header>
+                          <span className={cyberMatch.status}>
+                            {cyberMatch.status === "active" ? "LIVE" : "END"}
+                          </span>
+                          <h3>
+                            {cyberMatch.status === "active"
+                              ? "公开推理进行中"
+                              : cyberMatch.winnerPlayerId
+                                ? `${cyberMatch.players.find((player) => player.playerId === cyberMatch.winnerPlayerId)?.profile.nickname ?? "AI"} 获胜`
+                                : "本场平局"}
+                          </h3>
+                          {cyberMatch.answer && (
+                            <strong>答案：{cyberMatch.answer.title}</strong>
+                          )}
+                        </header>
+                        <div className="cyber-live-grid">
+                          {cyberMatch.players.map((player) => (
+                            <VisibleAiGuessTrail
+                              key={player.playerId}
+                              player={player}
+                            />
+                          ))}
+                        </div>
+                      </div>
                     )}
                   </section>
 
@@ -1706,7 +2221,15 @@ export function App() {
                   <div className="player-list">
                     {room.players.map((player) => (
                       <div key={player.id}>
-                        <i>{player.nickname.slice(0, 1).toUpperCase()}</i>
+                        {player.avatarUrl ? (
+                          <img
+                            className="player-avatar"
+                            src={player.avatarUrl}
+                            alt=""
+                          />
+                        ) : (
+                          <i>{player.nickname.slice(0, 1).toUpperCase()}</i>
+                        )}
                         <span>
                           {player.rankLabel && (
                             <em className="rank-badge">{player.rankLabel}</em>
@@ -1717,6 +2240,9 @@ export function App() {
                                 (opponent) => opponent.kind === player.botKind,
                               )?.badge ?? "AI"}
                             </em>
+                          )}
+                          {player.customAiId && (
+                            <em className="ai-badge">BGM</em>
                           )}
                           {player.nickname}
                         </span>

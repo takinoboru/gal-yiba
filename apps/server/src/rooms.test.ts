@@ -274,6 +274,31 @@ describe("RoomRegistry", () => {
     expect(started.round?.players).toHaveLength(2);
   });
 
+  it("adds a persistent Bangumi custom AI with its avatar", () => {
+    const registry = new RoomRegistry();
+    const host = registry.create("房主", "duel");
+    const added = registry.addCustomBot(
+      host.room.code,
+      host.session.playerId,
+      "bangumi:tester",
+      "测试厨",
+      "https://lain.bgm.tv/tester.jpg",
+    );
+    const bot = added.room.players.find(
+      (player) => player.customAiId === "bangumi:tester",
+    );
+    expect(bot).toMatchObject({
+      nickname: "测试厨",
+      ready: true,
+      connected: true,
+      customAiId: "bangumi:tester",
+      avatarUrl: "https://lain.bgm.tv/tester.jpg",
+    });
+    expect(registry.botPlayers(host.room.code)).toEqual([
+      { playerId: bot?.id, customAiId: "bangumi:tester" },
+    ]);
+  });
+
   it("caps 1v1 rooms at two players and awards a win when one leaves", () => {
     const registry = new RoomRegistry();
     const host = registry.create("房主", "duel");

@@ -32,6 +32,46 @@ interface BangumiRelatedSubject {
   relation: string;
 }
 
+export interface BangumiUser {
+  id: number;
+  username: string;
+  nickname: string;
+  avatar: {
+    large: string;
+    medium: string;
+    small: string;
+  };
+  sign: string;
+}
+
+export type BangumiCollectionType = 1 | 2 | 3 | 4 | 5;
+
+export interface BangumiUserGameCollection {
+  subject_id: number;
+  subject_type: 4;
+  type: BangumiCollectionType;
+  rate: number;
+  tags: string[];
+  updated_at: string;
+  private: boolean;
+  subject?: {
+    id: number;
+    name: string;
+    name_cn: string;
+    date?: string | null;
+    images?: Partial<
+      Record<"large" | "common" | "medium" | "small" | "grid", string>
+    >;
+  };
+}
+
+interface BangumiUserCollectionResponse {
+  data: BangumiUserGameCollection[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
 const bangumiOtomeTags = new Set([
   "乙女",
   "乙女向",
@@ -74,6 +114,38 @@ export class BangumiClient {
         ? { authorization: `Bearer ${options.accessToken}` }
         : {}),
     };
+  }
+
+  async getUser(usernameInput: string): Promise<BangumiUser> {
+    const username = usernameInput.trim().replace(/^@/, "");
+    if (!username) throw new Error("BANGUMI_USERNAME_REQUIRED");
+    return requestJson<BangumiUser>(
+      this.fetcher,
+      `${this.baseUrl}/v0/users/${encodeURIComponent(username)}`,
+      { headers: this.headers },
+    );
+  }
+
+  /** 读取用户公开的游戏收藏；私有收藏只有配置对应 Access Token 时才可见。 */
+  async getUserGameCollections(
+    usernameInput: string,
+  ): Promise<BangumiUserGameCollection[]> {
+    const username = usernameInput.trim().replace(/^@/, "");
+    if (!username) throw new Error("BANGUMI_USERNAME_REQUIRED");
+    const items: BangumiUserGameCollection[] = [];
+    const limit = 50;
+    let offset = 0;
+    while (true) {
+      const page = await requestJson<BangumiUserCollectionResponse>(
+        this.fetcher,
+        `${this.baseUrl}/v0/users/${encodeURIComponent(username)}/collections?subject_type=4&limit=${limit}&offset=${offset}`,
+        { headers: this.headers },
+      );
+      items.push(...page.data.filter((item) => item.subject_type === 4));
+      offset += page.data.length;
+      if (page.data.length === 0 || offset >= page.total) break;
+    }
+    return items;
   }
 
   async searchGames(

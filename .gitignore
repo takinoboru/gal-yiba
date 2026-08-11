@@ -14,5 +14,6 @@ coverage/
 .codex-ssh-askpass.cmd
 .codex-askpass/
 .codex-askpass-bin/
+.local/
 deploy.sh
 apps/web/public/music/README.txt

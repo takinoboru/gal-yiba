@@ -447,4 +447,71 @@ describe("BangumiClient", () => {
     expect(fetcher.mock.calls[0]?.[0]).toContain("/v0/subjects/123");
     expect(fetcher.mock.calls[1]?.[0]).toContain("/subjects/123/subjects");
   });
+
+  it("loads a public Bangumi profile and paginates game collections", async () => {
+    const fetcher = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        jsonResponse({
+          id: 7,
+          username: "sample-user",
+          nickname: "样例玩家",
+          avatar: {
+            large: "https://lain.bgm.tv/large.jpg",
+            medium: "https://lain.bgm.tv/medium.jpg",
+            small: "https://lain.bgm.tv/small.jpg",
+          },
+          sign: "hello",
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          total: 2,
+          limit: 1,
+          offset: 0,
+          data: [
+            {
+              subject_id: 11,
+              subject_type: 4,
+              type: 3,
+              rate: 8,
+              tags: [],
+              updated_at: "2026-01-01T00:00:00Z",
+              private: false,
+            },
+          ],
+        }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse({
+          total: 2,
+          limit: 1,
+          offset: 1,
+          data: [
+            {
+              subject_id: 12,
+              subject_type: 4,
+              type: 2,
+              rate: 9,
+              tags: [],
+              updated_at: "2026-01-02T00:00:00Z",
+              private: false,
+            },
+          ],
+        }),
+      );
+    const client = new BangumiClient({
+      userAgent: "GalYiBa/0.1 (https://example.test)",
+      fetcher,
+    });
+
+    await expect(client.getUser("@sample-user")).resolves.toMatchObject({
+      nickname: "样例玩家",
+    });
+    await expect(
+      client.getUserGameCollections("@sample-user"),
+    ).resolves.toHaveLength(2);
+    expect(fetcher.mock.calls[1]?.[0]).toContain("subject_type=4");
+    expect(fetcher.mock.calls[2]?.[0]).toContain("offset=1");
+  });
 });

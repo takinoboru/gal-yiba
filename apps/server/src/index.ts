@@ -7,7 +7,7 @@ import cors from "cors";
 import express from "express";
 import { Server } from "socket.io";
 import { z } from "zod";
-import { normalizeTitle } from "@gal-yiba/data";
+import { BangumiClient, normalizeTitle } from "@gal-yiba/data";
 import {
   comparisonKeys,
   fameTierPoolIncludes,
@@ -40,6 +40,12 @@ import {
   chooseAiGuess,
   getAiOpponentDefinition,
 } from "./services/ai-opponents.js";
+import {
+  CustomAiPlayerStore,
+  chooseCustomAiGuess,
+  customAiThinkTime,
+} from "./services/custom-ai-players.js";
+import { CyberArenaRegistry } from "./services/cyber-arena.js";
 import { demoCatalog } from "./demo-catalog.js";
 import { MatchmakingPool } from "./matchmaking.js";
 const port = Number(process.env.PORT ?? 3000);
@@ -60,6 +66,20 @@ const catalogRepository = databasePool
   ? new CatalogRepository(databasePool)
   : null;
 const matchRecorder = new MatchRecorder(databasePool);
+const customAiPlayers = new CustomAiPlayerStore(
+  process.env.CUSTOM_AI_STORE_PATH ??
+    join(process.cwd(), ".local", "custom-ai-players.json"),
+);
+const bangumiClient = new BangumiClient({
+  baseUrl: process.env.BANGUMI_API_BASE ?? "https://api.bgm.tv",
+  userAgent:
+    process.env.BANGUMI_USER_AGENT ??
+    "GalYiBa/0.1 (https://github.com/takinoboru/gal-yiba)",
+  ...(process.env.BANGUMI_ACCESS_TOKEN
+    ? { accessToken: process.env.BANGUMI_ACCESS_TOKEN }
+    : {}),
+});
+const cyberArena = new CyberArenaRegistry();
 /** 聊天语音消息：内存暂存 30 分钟，供回放/重连拉取。 */
 const chatAudios = new Map<string, { buffer: Buffer; mimeType: string }>();
 
@@ -91,6 +111,17 @@ const createRoomSchema = z.object({
   playerId: playerIdSchema,
   featureCode: featureCodeSchema,
   aiOpponent: z.enum(aiOpponentKinds).optional(),
+  customAiOpponentId: z.string().trim().min(1).max(160).optional(),
+});
+const customAiPlayerSchema = z.object({
+  handle: z.string().trim().min(2).max(65).startsWith("@"),
+  difficulty: z.enum(["easy", "medium", "hard"]),
+  strategy: z.enum(["hybrid", "entropy"]),
+});
+const cyberMatchSchema = z.object({
+  leftPlayerId: z.string().trim().min(1).max(160),
+  rightPlayerId: z.string().trim().min(1).max(160),
+  fameTier: z.enum(["novice", "standard", "veteran", "experienced", "master"]),
 });
 const matchmakingSchema = z.object({
   nickname: nicknameSchema,
@@ -278,43 +309,120 @@ async function scheduleAiOpponents(roomCode: string): Promise<void> {
     console.error("AI opponent could not load the catalog:", error);
     return;
   }
-  for (const { playerId, botKind } of rooms.botPlayers(roomCode)) {
+  for (const bot of rooms.botPlayers(roomCode)) {
+    const { playerId } = bot;
     if (aiOpponentTimers.has(playerId)) continue;
     const game = rooms.getPlayerGame(roomCode, playerId);
     if (game.status !== "active") continue;
-    const timer = setTimeout(() => {
-      aiOpponentTimers.delete(playerId);
-      void (async () => {
-        try {
-          const currentRoom = rooms.get(roomCode);
-          if (currentRoom.phase !== "active") return;
-          const currentGame = rooms.getPlayerGame(roomCode, playerId);
-          if (currentGame.status !== "active") return;
-          const decision = chooseAiGuess(catalog, currentGame, botKind);
-          if (!decision) return;
-          const result = rooms.submitPlayerGuess(
-            roomCode,
-            playerId,
-            decision.visualNovelId,
-            catalog,
-          );
-          await broadcastRoomState(result.room.code);
-          await persistMatchIfFinished(result.room.code);
-        } catch (error) {
-          const message =
-            error instanceof Error ? error.message : String(error);
-          if (
-            message !== "ROOM_NOT_FOUND" &&
-            message !== "ROOM_NOT_ACTIVE" &&
-            message !== "PLAYER_NOT_IN_ROUND"
-          ) {
-            console.error("AI opponent turn failed:", error);
+    const customProfile = bot.customAiId
+      ? await customAiPlayers.get(bot.customAiId)
+      : null;
+    if (bot.customAiId && !customProfile) continue;
+    const timer = setTimeout(
+      () => {
+        aiOpponentTimers.delete(playerId);
+        void (async () => {
+          try {
+            const currentRoom = rooms.get(roomCode);
+            if (currentRoom.phase !== "active") return;
+            const currentGame = rooms.getPlayerGame(roomCode, playerId);
+            if (currentGame.status !== "active") return;
+            const decision = customProfile
+              ? chooseCustomAiGuess(catalog, currentGame, customProfile)
+              : bot.botKind
+                ? chooseAiGuess(catalog, currentGame, bot.botKind)
+                : null;
+            if (!decision) return;
+            const result = rooms.submitPlayerGuess(
+              roomCode,
+              playerId,
+              decision.visualNovelId,
+              catalog,
+            );
+            await broadcastRoomState(result.room.code);
+            await persistMatchIfFinished(result.room.code);
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            if (
+              message !== "ROOM_NOT_FOUND" &&
+              message !== "ROOM_NOT_ACTIVE" &&
+              message !== "PLAYER_NOT_IN_ROUND"
+            ) {
+              console.error("AI opponent turn failed:", error);
+            }
           }
-        }
-      })();
-    }, aiThinkTime(game.guesses.length));
+        })();
+      },
+      customProfile
+        ? customAiThinkTime(customProfile.difficulty, game.guesses.length)
+        : aiThinkTime(game.guesses.length),
+    );
     timer.unref();
     aiOpponentTimers.set(playerId, timer);
+  }
+}
+
+const cyberAiTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function broadcastCyberState(matchId: string): void {
+  const state = cyberArena.get(matchId);
+  io.to(`cyber:${matchId}`).emit("cyber:state", state);
+  io.emit("cyber:matches-updated", { items: cyberArena.list() });
+}
+
+async function scheduleCyberMatch(matchId: string): Promise<void> {
+  let catalog: VisualNovel[];
+  try {
+    catalog = await loadCatalog();
+  } catch (error) {
+    console.error("Cyber arena could not load the catalog:", error);
+    return;
+  }
+  let activePlayers;
+  try {
+    activePlayers = cyberArena.activePlayers(matchId);
+  } catch {
+    return;
+  }
+  for (const player of activePlayers) {
+    const timerKey = `${matchId}:${player.playerId}`;
+    if (cyberAiTimers.has(timerKey)) continue;
+    const timer = setTimeout(
+      () => {
+        cyberAiTimers.delete(timerKey);
+        void (async () => {
+          try {
+            const current = cyberArena
+              .activePlayers(matchId)
+              .find((item) => item.playerId === player.playerId);
+            if (!current) return;
+            const decision = chooseCustomAiGuess(
+              catalog,
+              current.game,
+              current.profile,
+            );
+            if (!decision) return;
+            const state = cyberArena.submitGuess(
+              matchId,
+              player.playerId,
+              decision.visualNovelId,
+              catalog,
+            );
+            broadcastCyberState(matchId);
+            if (state.status === "active") await scheduleCyberMatch(matchId);
+          } catch (error) {
+            const message =
+              error instanceof Error ? error.message : String(error);
+            if (message !== "CYBER_MATCH_FINISHED")
+              console.error("Cyber arena AI turn failed:", error);
+          }
+        })();
+      },
+      customAiThinkTime(player.profile.difficulty, player.game.guesses.length),
+    );
+    timer.unref();
+    cyberAiTimers.set(timerKey, timer);
   }
 }
 
@@ -357,6 +465,67 @@ app.get("/api/ai-opponents", (_request, response) => {
     ),
     debugEnabled: aiDebugEnabled,
   });
+});
+
+app.get("/api/custom-ai-players", async (_request, response, next) => {
+  try {
+    response.setHeader("Cache-Control", "no-store");
+    response.json({ items: await customAiPlayers.list() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/custom-ai-players", async (request, response, next) => {
+  try {
+    const input = customAiPlayerSchema.parse(request.body);
+    const catalog = await loadCatalog();
+    if (catalog.length === 0) throw new Error("CATALOG_EMPTY");
+    const profile = await customAiPlayers.importBangumiUser(
+      input.handle,
+      input.difficulty,
+      input.strategy,
+      catalog,
+      bangumiClient,
+    );
+    io.emit("custom-ai:updated", { items: await customAiPlayers.list() });
+    response.status(201).json({ profile });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/cyber-matches", (_request, response) => {
+  response.setHeader("Cache-Control", "no-store");
+  response.json({ items: cyberArena.list() });
+});
+
+app.get("/api/cyber-matches/:matchId", (request, response, next) => {
+  try {
+    response.setHeader("Cache-Control", "no-store");
+    response.json({ match: cyberArena.get(String(request.params.matchId)) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post("/api/cyber-matches", async (request, response, next) => {
+  try {
+    const input = cyberMatchSchema.parse(request.body);
+    const [left, right, catalog] = await Promise.all([
+      customAiPlayers.get(input.leftPlayerId),
+      customAiPlayers.get(input.rightPlayerId),
+      loadCatalog(),
+    ]);
+    if (!left || !right) throw new Error("CUSTOM_AI_NOT_FOUND");
+    if (catalog.length === 0) throw new Error("CATALOG_EMPTY");
+    const match = cyberArena.create(left, right, catalog, input.fameTier);
+    broadcastCyberState(match.id);
+    void scheduleCyberMatch(match.id);
+    response.status(201).json({ match });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get("/api/catalog/search", async (request, response, next) => {
@@ -643,6 +812,25 @@ io.on("connection", (socket) => {
   broadcastRealtimeStats();
   socket.emit("matchmaking:stats", matchmakingStats());
 
+  socket.on("cyber:watch", async (payload: unknown, acknowledge) => {
+    try {
+      const matchId = z
+        .string()
+        .uuid()
+        .parse((payload as { matchId?: unknown })?.matchId);
+      const previous = socket.data.cyberMatchId;
+      if (typeof previous === "string") await socket.leave(`cyber:${previous}`);
+      await socket.join(`cyber:${matchId}`);
+      socket.data.cyberMatchId = matchId;
+      acknowledge({ ok: true, match: cyberArena.get(matchId) });
+    } catch (error) {
+      acknowledge({
+        ok: false,
+        error: error instanceof Error ? error.message : "INVALID_REQUEST",
+      });
+    }
+  });
+
   socket.on("matchmaking:join", async (payload: unknown, acknowledge) => {
     try {
       if (typeof socket.data.roomCode === "string")
@@ -760,8 +948,21 @@ io.on("connection", (socket) => {
       matchmaking.cancel(socket.id);
       broadcastMatchmakingState();
       const input = createRoomSchema.parse(payload);
-      if (input.aiOpponent && input.mode !== "duel")
+      if (input.aiOpponent && input.customAiOpponentId)
+        throw new Error("AI_OPPONENT_CONFLICT");
+      if (
+        (input.aiOpponent || input.customAiOpponentId) &&
+        input.mode !== "duel"
+      )
         throw new Error("AI_DUEL_ONLY");
+      const aiDefinition = input.aiOpponent
+        ? getAiOpponentDefinition(input.aiOpponent)
+        : null;
+      const customProfile = input.customAiOpponentId
+        ? await customAiPlayers.get(input.customAiOpponentId)
+        : null;
+      if (input.customAiOpponentId && !customProfile)
+        throw new Error("CUSTOM_AI_NOT_FOUND");
       const result = rooms.create(
         input.nickname,
         input.mode,
@@ -769,9 +970,6 @@ io.on("connection", (socket) => {
         input.playerId,
         input.featureCode,
       );
-      const aiDefinition = input.aiOpponent
-        ? getAiOpponentDefinition(input.aiOpponent)
-        : null;
       const room = aiDefinition
         ? rooms.addBot(
             result.room.code,
@@ -779,13 +977,32 @@ io.on("connection", (socket) => {
             aiDefinition.kind,
             aiDefinition.nickname,
           ).room
-        : result.room;
+        : customProfile
+          ? rooms.addCustomBot(
+              result.room.code,
+              result.session.playerId,
+              customProfile.id,
+              customProfile.nickname,
+              customProfile.avatarUrl,
+            ).room
+          : result.room;
       if (aiDefinition) {
         const bot = rooms
           .botPlayers(room.code)
           .find((player) => player.botKind === aiDefinition.kind);
         if (bot) {
           rooms.postChat(room.code, bot.playerId, aiDefinition.openingMessage);
+        }
+      } else if (customProfile) {
+        const bot = rooms
+          .botPlayers(room.code)
+          .find((player) => player.customAiId === customProfile.id);
+        if (bot) {
+          rooms.postChat(
+            room.code,
+            bot.playerId,
+            `${customProfile.handle} 的公开收藏记忆已载入。策略：${customProfile.strategy === "entropy" ? "最小信息熵" : "混合策略"}。`,
+          );
         }
       }
       socket.join(result.room.code);
