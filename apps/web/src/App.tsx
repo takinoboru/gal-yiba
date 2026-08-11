@@ -5,6 +5,7 @@ import {
   defaultComparisonKeys,
   rankDefinitions,
   voteTierThresholds,
+  type AiOpponentKind,
   type ComparisonKey,
   type ComparisonResult,
   type FameTier,
@@ -133,6 +134,36 @@ const rankedFameOptions: Array<{
   { value: "veteran", label: "标准", winRate: "40% 胜率即可增长" },
 ];
 
+interface AiOpponentOption {
+  kind: AiOpponentKind;
+  nickname: string;
+  badge: string;
+  specialty: string;
+  tagline: string;
+  description: string;
+}
+
+const fallbackAiOpponents: AiOpponentOption[] = [
+  {
+    kind: "key-fan",
+    nickname: "键种",
+    badge: "KEY",
+    specialty: "Key",
+    tagline: "Key 的记忆，一部也不会漏。",
+    description:
+      "完整记得 Key 作品；面对其他会社，只了解年份、会社和年龄分级等少量信息。",
+  },
+  {
+    kind: "yuzu-fan",
+    nickname: "柚子厨",
+    badge: "YUZU",
+    specialty: "Yuzusoft",
+    tagline: "柚子社谱系，倒背如流。",
+    description:
+      "完整记得 Yuzusoft（ゆずソフト）作品；面对其他会社，只保留少量基础信息。",
+  },
+];
+
 const rankPromotionRows = [
   { name: "初心", tier: "beginner" },
   { name: "旮士", tier: "ga_soldier" },
@@ -147,7 +178,7 @@ interface RoomPlayer {
   ready: boolean;
   connected: boolean;
   rankLabel: string | null;
-  botKind?: "key-fan";
+  botKind?: AiOpponentKind;
 }
 
 interface RoomSnapshot {
@@ -208,6 +239,18 @@ interface PublicGameSession {
   deadlineAt: string;
   attemptsLeft: number;
   answer?: { id: string; title: string; displayTitle: string };
+}
+
+interface AiDebugPlayer {
+  playerId: string;
+  botKind: AiOpponentKind;
+  game: PublicGameSession;
+}
+
+interface FameCatalogInfo {
+  counts: Record<FameTier, number>;
+  sizes: Record<FameTier, number>;
+  source: "demo" | "database";
 }
 
 interface ChatMessage {
@@ -329,9 +372,12 @@ export function App() {
   const [matchmakingFameTier, setMatchmakingFameTier] =
     useState<RankedFameTier>("veteran");
   const [matchmakingBestOf, setMatchmakingBestOf] = useState<RankedBestOf>(1);
-  const [fameCounts, setFameCounts] = useState<Record<FameTier, number> | null>(
-    null,
-  );
+  const [fameCatalogInfo, setFameCatalogInfo] =
+    useState<FameCatalogInfo | null>(null);
+  const [aiOpponents, setAiOpponents] =
+    useState<AiOpponentOption[]>(fallbackAiOpponents);
+  const [aiDebugAvailable, setAiDebugAvailable] = useState(false);
+  const [aiDebugPlayers, setAiDebugPlayers] = useState<AiDebugPlayer[]>([]);
   const [joinCode, setJoinCode] = useState("");
   const [room, setRoom] = useState<RoomSnapshot | null>(null);
   const [session, setSession] = useState<Session | null>(null);
@@ -437,6 +483,11 @@ export function App() {
           (player) => player.playerId !== session?.playerId,
         ) ?? null)
       : null;
+  const aiDebugOpponent = duelOpponent
+    ? (aiDebugPlayers.find(
+        (player) => player.playerId === duelOpponent.playerId,
+      ) ?? null)
+    : null;
   useEffect(() => {
     localStorage.setItem("gal-yiba-color-theme", colorTheme);
     document.documentElement.style.colorScheme =
@@ -465,12 +516,25 @@ export function App() {
 
   useEffect(() => {
     void fetch("/api/catalog/fame-tiers")
+      .then((response) => response.json() as Promise<FameCatalogInfo>)
+      .then(setFameCatalogInfo)
+      .catch(() => setFameCatalogInfo(null));
+    void fetch("/api/ai-opponents")
       .then(
         (response) =>
-          response.json() as Promise<{ counts: Record<FameTier, number> }>,
+          response.json() as Promise<{
+            items: AiOpponentOption[];
+            debugEnabled: boolean;
+          }>,
       )
-      .then((body) => setFameCounts(body.counts))
-      .catch(() => setFameCounts(null));
+      .then((body) => {
+        if (body.items.length > 0) setAiOpponents(body.items);
+        setAiDebugAvailable(body.debugEnabled);
+      })
+      .catch(() => {
+        setAiOpponents(fallbackAiOpponents);
+        setAiDebugAvailable(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -672,7 +736,10 @@ export function App() {
     const onRoomUpdated = (nextRoom: RoomSnapshot) => {
       setRoom(nextRoom);
       setSelected(nextRoom.rules.comparisonKeys);
-      if (!nextRoom.round) setGame(null);
+      if (!nextRoom.round) {
+        setGame(null);
+        setAiDebugPlayers([]);
+      }
       if (nextRoom.players.length >= 2) {
         setError((current) =>
           current === "NOT_ENOUGH_PLAYERS" ? "" : current,
@@ -680,6 +747,13 @@ export function App() {
       }
     };
     const onGameState = (nextGame: PublicGameSession) => setGame(nextGame);
+    const onAiDebugState = (payload: {
+      enabled: boolean;
+      players: AiDebugPlayer[];
+    }) => {
+      setAiDebugAvailable(payload.enabled);
+      setAiDebugPlayers(payload.players);
+    };
     const onRealtimeStats = (nextStats: RealtimeStats) =>
       setRealtimeStats(nextStats);
     const onMatchmakingStats = (nextStats: MatchmakingStats) =>
@@ -694,6 +768,7 @@ export function App() {
     socket.on("disconnect", onDisconnect);
     socket.on("room:updated", onRoomUpdated);
     socket.on("game:state", onGameState);
+    socket.on("ai:debug-state", onAiDebugState);
     socket.on("presence:updated", onRealtimeStats);
     socket.on("matchmaking:stats", onMatchmakingStats);
     socket.on("matchmaking:position", onMatchmakingPosition);
@@ -708,6 +783,7 @@ export function App() {
       socket.off("disconnect", onDisconnect);
       socket.off("room:updated", onRoomUpdated);
       socket.off("game:state", onGameState);
+      socket.off("ai:debug-state", onAiDebugState);
       socket.off("presence:updated", onRealtimeStats);
       socket.off("matchmaking:stats", onMatchmakingStats);
       socket.off("matchmaking:position", onMatchmakingPosition);
@@ -933,7 +1009,7 @@ export function App() {
     }
   }
 
-  function createRoom(aiOpponent?: "key-fan") {
+  function createRoom(aiOpponent?: AiOpponentKind) {
     socket.emit(
       "room:create",
       {
@@ -1387,11 +1463,7 @@ export function App() {
                             title={option.description}
                           >
                             <b>{option.label}</b>
-                            <small>
-                              {fameCounts
-                                ? `${fameCounts[option.value]} 部`
-                                : option.description}
-                            </small>
+                            <small>{option.description}</small>
                           </button>
                         ))}
                       </div>
@@ -1401,6 +1473,13 @@ export function App() {
                             (option) => option.value === selectedFameTier,
                           )?.description
                         }
+                        {fameCatalogInfo?.source === "demo" && (
+                          <small className="local-catalog-capacity">
+                            本地演示题库当前可用{" "}
+                            {fameCatalogInfo.counts[selectedFameTier]} 部；
+                            配置数据库后按该档位完整容量运行。
+                          </small>
+                        )}
                       </p>
                     </div>
                     <div className="entry-actions room-entry-actions">
@@ -1442,30 +1521,39 @@ export function App() {
                     </div>
                   </section>
 
-                  <section className="entry-function-block key-ai-block">
+                  <section className="entry-function-block ai-opponents-block">
                     <header>
                       <div>
-                        <small>AI 挑战</small>
-                        <h2>Key 孝子 AI</h2>
+                        <small>AI 对战</small>
+                        <h2>选择 AI 对手</h2>
                       </div>
-                      <span>固定 1v1 · 可自定义本局判定标准</span>
+                      <span>固定 1v1 · 可扩展对手 · 自定义判定标准</span>
                     </header>
-                    <div className="key-ai-body">
-                      <div>
-                        <strong>Key 作品，全都刻在 DNA 里。</strong>
-                        <p>
-                          它完整记得 Key
-                          社作品；面对其他会社，只模糊记得年份、会社和年龄分级等少量信息，并以随机选择模拟真人猜测。
-                        </p>
-                      </div>
-                      <button
-                        className="key-ai-button"
-                        disabled={!canEnter || matchmakingPosition !== null}
-                        onClick={() => createRoom("key-fan")}
-                      >
-                        挑战 Key 孝子 AI
-                      </button>
+                    <div className="ai-opponent-grid">
+                      {aiOpponents.map((opponent) => (
+                        <article key={opponent.kind}>
+                          <header>
+                            <em>{opponent.badge}</em>
+                            <h3>{opponent.nickname}</h3>
+                            <small>{opponent.specialty}</small>
+                          </header>
+                          <strong>{opponent.tagline}</strong>
+                          <p>{opponent.description}</p>
+                          <button
+                            className="ai-opponent-button entry-cta"
+                            disabled={!canEnter || matchmakingPosition !== null}
+                            onClick={() => createRoom(opponent.kind)}
+                          >
+                            挑战 {opponent.nickname}
+                          </button>
+                        </article>
+                      ))}
                     </div>
+                    {aiDebugAvailable && (
+                      <p className="ai-debug-available">
+                        AI 调试模式已启用；进入对局后可切换完整猜测轨迹。
+                      </p>
+                    )}
                   </section>
 
                   <section className="entry-function-block ranked-match-block">
@@ -1560,7 +1648,7 @@ export function App() {
                     <div className="ranked-match-action">
                       {matchmakingPosition === null ? (
                         <button
-                          className="matchmaking-button"
+                          className="matchmaking-button entry-cta"
                           disabled={!connected}
                           onClick={joinMatchmaking}
                         >
@@ -1573,7 +1661,7 @@ export function App() {
                         </button>
                       ) : (
                         <button
-                          className="matchmaking-button waiting"
+                          className="matchmaking-button entry-cta waiting"
                           onClick={cancelMatchmaking}
                         >
                           匹配中 · 当前第 {matchmakingPosition} 位
@@ -1623,8 +1711,12 @@ export function App() {
                           {player.rankLabel && (
                             <em className="rank-badge">{player.rankLabel}</em>
                           )}
-                          {player.botKind === "key-fan" && (
-                            <em className="ai-badge">KEY AI</em>
+                          {player.botKind && (
+                            <em className="ai-badge">
+                              {aiOpponents.find(
+                                (opponent) => opponent.kind === player.botKind,
+                              )?.badge ?? "AI"}
+                            </em>
                           )}
                           {player.nickname}
                         </span>
@@ -1747,9 +1839,7 @@ export function App() {
                           title={option.description}
                         >
                           <b>{option.label}</b>
-                          <small>
-                            {fameCounts ? `${fameCounts[option.value]} 部` : ""}
-                          </small>
+                          <small>{option.description}</small>
                         </button>
                       ))}
                     </div>
@@ -1759,6 +1849,12 @@ export function App() {
                           (option) => option.value === room.rules.pool.fameTier,
                         )?.description
                       }
+                      {fameCatalogInfo?.source === "demo" && (
+                        <small className="local-catalog-capacity">
+                          本地演示题库当前可用{" "}
+                          {fameCatalogInfo.counts[room.rules.pool.fameTier]} 部
+                        </small>
+                      )}
                     </p>
                   </div>
                   <div className="pool-builder-head">
@@ -2276,6 +2372,56 @@ export function App() {
               </div>
             ) : null}
 
+            {aiDebugAvailable && aiDebugOpponent && (
+              <details className="ai-debug-panel">
+                <summary>显示 AI 完整轨迹</summary>
+                <small>仅在非生产环境通过 AI_DEBUG=true 开启</small>
+                <div className="guess-history ai-debug-history">
+                  <div className="duel-column opponent debug-visible">
+                    {aiDebugOpponent.game.guesses.length === 0 ? (
+                      <p>等待 AI 第一次猜测……</p>
+                    ) : (
+                      aiDebugOpponent.game.guesses
+                        .slice()
+                        .reverse()
+                        .map((guess) => (
+                          <article key={guess.visualNovelId}>
+                            <header className={`title-${guess.titleStatus}`}>
+                              <b>{guess.displayTitle ?? guess.title}</b>
+                              <span>AI 调试 · 第 {guess.guessNumber} 次</span>
+                            </header>
+                            <div>
+                              {guess.comparison.map((result) => (
+                                <span
+                                  key={result.key}
+                                  className={`comparison-card ${result.status}`}
+                                >
+                                  <small>{comparisonLabels[result.key]}</small>
+                                  <strong
+                                    className="comparison-value"
+                                    title={formatComparisonValue(result)}
+                                  >
+                                    {formatComparisonValue(result)}
+                                  </strong>
+                                  <span
+                                    className={`comparison-verdict ${result.status}`}
+                                    aria-label={formatComparisonAriaLabel(
+                                      result,
+                                    )}
+                                  >
+                                    {comparisonSymbol(result)}
+                                  </span>
+                                </span>
+                              ))}
+                            </div>
+                          </article>
+                        ))
+                    )}
+                  </div>
+                </div>
+              </details>
+            )}
+
             <div
               className={
                 duelOpponent ? "guess-history duel-history" : "guess-history"
@@ -2671,13 +2817,14 @@ export function App() {
               >
                 <button
                   type="button"
-                  className={`chat-voice ${recording ? "listening" : ""}`}
+                  className={`chat-action-button chat-voice ${recording ? "listening" : ""}`}
                   aria-label={recording ? "停止录音并发送" : "录音并发送语音"}
                   onClick={() => void toggleRecord()}
                 >
                   🎤
                 </button>
                 <input
+                  aria-label="对话内容"
                   value={chatText}
                   maxLength={200}
                   placeholder={
@@ -2687,7 +2834,14 @@ export function App() {
                   }
                   onChange={(event) => setChatText(event.target.value)}
                 />
-                <button type="submit">发送</button>
+                <button
+                  type="submit"
+                  className="chat-action-button chat-send"
+                  aria-label="发送消息"
+                  title="发送消息（也可按回车）"
+                >
+                  ↑
+                </button>
               </form>
             </div>
           )}

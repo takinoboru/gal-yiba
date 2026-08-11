@@ -2674,20 +2674,47 @@ button {
 }
 .chat-input {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 40px minmax(0, 1fr) 40px;
+  align-items: center;
   gap: 8px;
   padding: 10px;
   border-top: 1px solid var(--line);
 }
 .chat-input input {
+  width: 100%;
+  min-width: 0;
+  height: 40px;
+  min-height: 40px;
+  border: 1px solid var(--line-strong);
+  border-radius: 20px;
+  padding: 0 15px;
+  color: var(--ink-strong);
+  background: var(--surface-solid);
   font-size: 13px;
 }
-.chat-input button {
-  border-color: transparent;
+.chat-input .chat-action-button {
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  min-height: 40px;
+  border: 1px solid var(--line-strong);
+  border-radius: 50%;
+  padding: 0;
+  color: var(--ink-strong);
+  background: var(--surface-solid);
+}
+.chat-input .chat-action-button:hover {
+  border-color: var(--coral);
+  transform: translateY(-1px);
+  box-shadow: 0 0 12px color-mix(in srgb, var(--coral) 42%, transparent);
+}
+.chat-input .chat-send {
   color: #fff;
-  font-size: 12px;
-  padding: 0 14px;
   background: linear-gradient(135deg, var(--coral), var(--mint));
+  font-size: 20px;
+  font-weight: 900;
+  line-height: 1;
 }
 @media (max-width: 640px) {
   .room-chat {
@@ -2736,6 +2763,38 @@ button {
 .duel-column.opponent small {
   color: transparent;
   user-select: none;
+}
+.duel-column.opponent.debug-visible .comparison-value,
+.duel-column.opponent.debug-visible small {
+  color: inherit;
+  user-select: text;
+}
+.ai-debug-panel {
+  margin: 13px 0 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  padding: 11px 13px;
+  background: color-mix(in srgb, var(--coral-soft) 34%, var(--surface-solid));
+}
+.ai-debug-panel summary {
+  cursor: pointer;
+  color: var(--ink-strong);
+  font-size: 11px;
+  font-weight: 800;
+}
+.ai-debug-panel > small {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.ai-debug-history {
+  margin-top: 10px;
+}
+.ai-debug-history .duel-column > p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
 }
 @media (max-width: 980px) {
   .guess-history.duel-history {
@@ -2836,7 +2895,7 @@ button {
 .room-entry-block {
   background: color-mix(in srgb, var(--coral-soft) 22%, var(--surface-solid));
 }
-.key-ai-block {
+.ai-opponents-block {
   background:
     radial-gradient(
       circle at 88% 18%,
@@ -2846,26 +2905,62 @@ button {
     color-mix(in srgb, var(--coral-soft) 16%, var(--surface-solid));
   box-shadow: inset 4px 0 color-mix(in srgb, var(--coral) 72%, transparent);
 }
-.key-ai-body {
+.ai-opponent-grid {
   display: grid;
-  grid-template-columns: 1fr auto;
-  align-items: center;
-  gap: 20px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
   padding-top: 16px;
 }
-.key-ai-body strong {
+.ai-opponent-grid article {
+  display: grid;
+  grid-template-rows: auto auto 1fr auto;
+  gap: 9px;
+  border: 1px solid var(--line-strong);
+  border-radius: 16px;
+  padding: 15px;
+  background: color-mix(in srgb, var(--surface-solid) 82%, transparent);
+}
+.ai-opponent-grid article > header {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 8px;
+}
+.ai-opponent-grid article > header em {
+  border: 1px solid color-mix(in srgb, var(--coral) 62%, var(--line));
+  border-radius: 999px;
+  padding: 3px 7px;
+  color: var(--coral-strong);
+  background: var(--coral-soft);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+}
+.ai-opponent-grid article > header h3 {
+  margin: 0;
+  color: var(--ink-strong);
+  font-size: 17px;
+}
+.ai-opponent-grid article > header small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.ai-opponent-grid strong {
   color: var(--ink-strong);
   font-size: 15px;
 }
-.key-ai-body p {
-  max-width: 66ch;
-  margin: 7px 0 0;
+.ai-opponent-grid p {
+  margin: 0;
   color: var(--muted);
   font-size: 12px;
   line-height: 1.75;
 }
-.key-ai-button {
+.ai-opponent-button {
+  width: 100%;
+  min-height: 46px;
   border-color: color-mix(in srgb, var(--coral) 72%, var(--line-strong));
+  border-radius: 14px;
   color: var(--ink-strong);
   background: linear-gradient(
     135deg,
@@ -2874,9 +2969,24 @@ button {
   );
   font-weight: 800;
 }
-.key-ai-button:disabled {
+.ai-opponent-button:disabled {
   cursor: not-allowed;
   opacity: 0.55;
+}
+.entry-cta {
+  border-radius: 14px;
+}
+.ai-debug-available,
+.local-catalog-capacity {
+  display: block;
+  margin-top: 10px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.55;
+}
+.ai-debug-available {
+  margin-bottom: 0;
+  color: var(--coral-strong);
 }
 .ai-badge {
   margin-right: 6px;
@@ -2948,6 +3058,7 @@ button {
 .ranked-match-action .matchmaking-button {
   width: 100%;
   min-height: 54px;
+  border-radius: 14px;
 }
 .rank-promotion-table {
   margin-top: 14px;
@@ -3114,11 +3225,8 @@ button {
   .rank-profile-card {
     grid-template-columns: 1fr;
   }
-  .key-ai-body {
+  .ai-opponent-grid {
     grid-template-columns: 1fr;
-  }
-  .key-ai-button {
-    width: 100%;
   }
   .rank-profile-card > div:nth-child(2) {
     justify-items: start;

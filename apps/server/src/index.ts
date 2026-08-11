@@ -34,15 +34,18 @@ import { MatchRecorder } from "./services/match-recorder.js";
 import { searchCatalog } from "./services/catalog-search.js";
 import { CatalogSyncService } from "./services/catalog-sync.js";
 import {
-  chooseKeyFanGuess,
-  keyFanAiKind,
-  keyFanAiNickname,
-  keyFanThinkTime,
-} from "./services/key-fan-ai.js";
+  aiOpponentDefinitions,
+  aiOpponentKinds,
+  aiThinkTime,
+  chooseAiGuess,
+  getAiOpponentDefinition,
+} from "./services/ai-opponents.js";
 import { demoCatalog } from "./demo-catalog.js";
 import { MatchmakingPool } from "./matchmaking.js";
 const port = Number(process.env.PORT ?? 3000);
 const webOrigin = process.env.WEB_ORIGIN ?? "http://localhost:5173";
+const aiDebugEnabled =
+  process.env.NODE_ENV !== "production" && process.env.AI_DEBUG === "true";
 const app = express();
 const httpServer = createServer(app);
 const io = new Server(httpServer, {
@@ -87,7 +90,7 @@ const createRoomSchema = z.object({
   fameTier: z.enum(["novice", "standard", "veteran", "experienced", "master"]),
   playerId: playerIdSchema,
   featureCode: featureCodeSchema,
-  aiOpponent: z.literal("key-fan").optional(),
+  aiOpponent: z.enum(aiOpponentKinds).optional(),
 });
 const matchmakingSchema = z.object({
   nickname: nicknameSchema,
@@ -175,11 +178,20 @@ async function broadcastRoomState(roomCode: string): Promise<void> {
         "game:state",
         rooms.getPlayerGame(roomCode, identity.playerId),
       );
+      if (aiDebugEnabled) {
+        roomSocket.emit("ai:debug-state", {
+          enabled: true,
+          players: rooms.botPlayers(roomCode).map((bot) => ({
+            ...bot,
+            game: rooms.getPlayerGame(roomCode, bot.playerId),
+          })),
+        });
+      }
     } catch {
       // Ignore sockets that have not completed room authentication.
     }
   }
-  void scheduleKeyFanAi(roomCode);
+  void scheduleAiOpponents(roomCode);
 }
 
 function realtimeStats() {
@@ -249,9 +261,9 @@ function scheduleIntermissionEnd(roomCode: string, deadlineAt: string): void {
   }, delay).unref();
 }
 
-const keyFanAiTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const aiOpponentTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
-async function scheduleKeyFanAi(roomCode: string): Promise<void> {
+async function scheduleAiOpponents(roomCode: string): Promise<void> {
   let room;
   try {
     room = rooms.get(roomCode);
@@ -263,22 +275,22 @@ async function scheduleKeyFanAi(roomCode: string): Promise<void> {
   try {
     catalog = await loadCatalog();
   } catch (error) {
-    console.error("Key fan AI could not load the catalog:", error);
+    console.error("AI opponent could not load the catalog:", error);
     return;
   }
-  for (const playerId of rooms.botPlayerIds(roomCode, keyFanAiKind)) {
-    if (keyFanAiTimers.has(playerId)) continue;
+  for (const { playerId, botKind } of rooms.botPlayers(roomCode)) {
+    if (aiOpponentTimers.has(playerId)) continue;
     const game = rooms.getPlayerGame(roomCode, playerId);
     if (game.status !== "active") continue;
     const timer = setTimeout(() => {
-      keyFanAiTimers.delete(playerId);
+      aiOpponentTimers.delete(playerId);
       void (async () => {
         try {
           const currentRoom = rooms.get(roomCode);
           if (currentRoom.phase !== "active") return;
           const currentGame = rooms.getPlayerGame(roomCode, playerId);
           if (currentGame.status !== "active") return;
-          const decision = chooseKeyFanGuess(catalog, currentGame);
+          const decision = chooseAiGuess(catalog, currentGame, botKind);
           if (!decision) return;
           const result = rooms.submitPlayerGuess(
             roomCode,
@@ -296,13 +308,13 @@ async function scheduleKeyFanAi(roomCode: string): Promise<void> {
             message !== "ROOM_NOT_ACTIVE" &&
             message !== "PLAYER_NOT_IN_ROUND"
           ) {
-            console.error("Key fan AI turn failed:", error);
+            console.error("AI opponent turn failed:", error);
           }
         }
       })();
-    }, keyFanThinkTime());
+    }, aiThinkTime(game.guesses.length));
     timer.unref();
-    keyFanAiTimers.set(playerId, timer);
+    aiOpponentTimers.set(playerId, timer);
   }
 }
 
@@ -329,6 +341,22 @@ app.get("/api/matchmaking/stats", (_request, response) => {
 
 app.get("/api/rules/options", (_request, response) => {
   response.json({ comparisonKeys, defaults: defaultRules });
+});
+
+app.get("/api/ai-opponents", (_request, response) => {
+  response.json({
+    items: aiOpponentDefinitions.map(
+      ({ kind, nickname, badge, specialty, tagline, description }) => ({
+        kind,
+        nickname,
+        badge,
+        specialty,
+        tagline,
+        description,
+      }),
+    ),
+    debugEnabled: aiDebugEnabled,
+  });
 });
 
 app.get("/api/catalog/search", async (request, response, next) => {
@@ -400,6 +428,7 @@ app.get("/api/catalog/fame-tiers", async (_request, response, next) => {
     response.json({
       counts,
       sizes: fameTierPoolSizes,
+      source: catalogRepository ? "database" : "demo",
       ranking: {
         primaryMetric: "bangumiVoteCount",
         primaryTop: fameTierPoolSizes.veteran,
@@ -740,21 +769,23 @@ io.on("connection", (socket) => {
         input.playerId,
         input.featureCode,
       );
-      const room = input.aiOpponent
-        ? rooms.addKeyFanBot(
+      const aiDefinition = input.aiOpponent
+        ? getAiOpponentDefinition(input.aiOpponent)
+        : null;
+      const room = aiDefinition
+        ? rooms.addBot(
             result.room.code,
             result.session.playerId,
-            keyFanAiNickname,
+            aiDefinition.kind,
+            aiDefinition.nickname,
           ).room
         : result.room;
-      if (input.aiOpponent) {
-        const [botPlayerId] = rooms.botPlayerIds(room.code, keyFanAiKind);
-        if (botPlayerId) {
-          rooms.postChat(
-            room.code,
-            botPlayerId,
-            "Key 作品我全都记得。其他作品只知道年份、会社和年龄分级，而且会随机猜。",
-          );
+      if (aiDefinition) {
+        const bot = rooms
+          .botPlayers(room.code)
+          .find((player) => player.botKind === aiDefinition.kind);
+        if (bot) {
+          rooms.postChat(room.code, bot.playerId, aiDefinition.openingMessage);
         }
       }
       socket.join(result.room.code);

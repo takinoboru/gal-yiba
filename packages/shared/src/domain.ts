@@ -37,6 +37,7 @@ export type Playtime = "very_short" | "short" | "medium" | "long" | "very_long";
 export type AnimeAdaptation = "none" | "announced" | "has_adaptation";
 export type AgeRating = "all_ages" | "restricted" | "unknown";
 export type GameMode = "solo" | "duel" | "race";
+export type AiOpponentKind = "key-fan" | "yuzu-fan";
 export type FameTier =
   "novice" | "standard" | "veteran" | "experienced" | "master";
 export type HeroineHairColor =

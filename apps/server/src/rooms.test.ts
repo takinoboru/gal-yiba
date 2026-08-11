@@ -239,20 +239,29 @@ describe("RoomRegistry", () => {
     expect(started.round?.players).toHaveLength(1);
   });
 
-  it("adds a ready Key fan AI opponent to a duel", () => {
+  it.each([
+    ["key-fan", "键种"],
+    ["yuzu-fan", "柚子厨"],
+  ] as const)("adds a ready %s AI opponent to a duel", (botKind, nickname) => {
     const registry = new RoomRegistry();
     const host = registry.create("房主", "duel");
-    const added = registry.addKeyFanBot(host.room.code, host.session.playerId);
-    const bot = added.room.players.find(
-      (player) => player.botKind === "key-fan",
+    const added = registry.addBot(
+      host.room.code,
+      host.session.playerId,
+      botKind,
+      nickname,
     );
+    const bot = added.room.players.find((player) => player.botKind === botKind);
 
     expect(bot).toMatchObject({
-      nickname: "Key 孝子 AI",
+      nickname,
       ready: true,
       connected: true,
-      botKind: "key-fan",
+      botKind,
     });
+    expect(registry.botPlayers(host.room.code)).toEqual([
+      { playerId: bot?.id, botKind },
+    ]);
     expect(added.room.players).toHaveLength(2);
 
     const started = registry.start(

@@ -5,6 +5,7 @@ import {
   defaultComparisonKeys,
   publicGameSession,
   submitGuess,
+  type AiOpponentKind,
   type GameRules,
   type FameTier,
   type GameMode,
@@ -23,7 +24,7 @@ export interface RoomPlayer {
   ready: boolean;
   connected: boolean;
   rankLabel: string | null;
-  botKind?: "key-fan";
+  botKind?: AiOpponentKind;
 }
 
 export interface RankedMatchConfig {
@@ -334,10 +335,11 @@ export class RoomRegistry {
     return { room: snapshot(room), session: { playerId, reconnectToken } };
   }
 
-  addKeyFanBot(
+  addBot(
     codeInput: string,
     hostPlayerId: string,
-    nickname = "Key 孝子 AI",
+    botKind: AiOpponentKind,
+    nickname: string,
   ): { room: RoomSnapshot; playerId: string } {
     const room = this.requireRoom(codeInput.trim().toUpperCase());
     if (room.phase !== "lobby") throw new Error("ROOM_ALREADY_STARTED");
@@ -351,7 +353,7 @@ export class RoomRegistry {
       ready: true,
       connected: true,
       rankLabel: null,
-      botKind: "key-fan",
+      botKind,
     });
     room.scores.set(playerId, 0);
     room.featureCodes.set(playerId, null);
@@ -359,11 +361,16 @@ export class RoomRegistry {
     return { room: snapshot(room), playerId };
   }
 
-  botPlayerIds(codeInput: string, botKind: "key-fan"): string[] {
+  botPlayers(
+    codeInput: string,
+  ): Array<{ playerId: string; botKind: AiOpponentKind }> {
     const room = this.requireRoom(codeInput.trim().toUpperCase());
     return [...room.players.values()]
-      .filter((player) => player.botKind === botKind)
-      .map((player) => player.id);
+      .filter(
+        (player): player is RoomPlayer & { botKind: AiOpponentKind } =>
+          player.botKind != null,
+      )
+      .map((player) => ({ playerId: player.id, botKind: player.botKind }));
   }
 
   reconnect(
